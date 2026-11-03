@@ -40,6 +40,7 @@ import (
 
 // Plugin is identical to DevicePluginServer interface of device plugin API.
 type AMDGPUPlugin struct {
+	pluginapi.UnimplementedDevicePluginServer
 	AMDGPUs            map[string]map[string]interface{}
 	Heartbeat          chan bool
 	signal             chan os.Signal
@@ -351,7 +352,7 @@ func (p *AMDGPUPlugin) Allocate(ctx context.Context, r *pluginapi.AllocateReques
 		dev.Permissions = "rw"
 		car.Devices = append(car.Devices, dev)
 
-		for _, id := range req.DevicesIDs {
+		for _, id := range req.DevicesIds {
 			glog.Infof("Allocating device ID: %s", id)
 
 			for k, v := range p.AMDGPUs[id] {

@@ -17,10 +17,13 @@
 package plugin
 
 import (
+	"context"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/ROCm/k8s-device-plugin/internal/pkg/naming"
+	"google.golang.org/grpc"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
@@ -144,5 +147,47 @@ func TestBucketDevices(t *testing.T) {
 				t.Errorf("bucketDevices() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// The newer kubelet API requires an embedded gRPC server and renamed the
+// allocation request's device-ID field. Verify the requested GPU's mapping.
+func TestDevicePluginAPICompatibility(t *testing.T) {
+	plugin := NewAMDGPUPlugin()
+	plugin.AMDGPUs = map[string]map[string]interface{}{
+		"gpu-a": {"card": 0, "renderD": 128, "numaNode": 0},
+		"gpu-b": {"card": 1, "renderD": 129, "numaNode": 1},
+	}
+	server := grpc.NewServer()
+	defer server.Stop()
+	// Registration also checks that the unimplemented server is embedded by
+	// value; a nil pointer embed would panic here despite satisfying the type.
+	pluginapi.RegisterDevicePluginServer(server, plugin)
+	response, err := plugin.Allocate(context.Background(), &pluginapi.AllocateRequest{
+		ContainerRequests: []*pluginapi.ContainerAllocateRequest{
+			{DevicesIds: []string{"gpu-b"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"/dev/dri/card1", "/dev/dri/renderD129", "/dev/kfd"},
+	}
+	if len(response.ContainerResponses) != len(want) {
+		t.Fatalf("got %d container responses, want %d", len(response.ContainerResponses), len(want))
+	}
+	for i, container := range response.ContainerResponses {
+		var paths []string
+		for _, device := range container.Devices {
+			if device.ContainerPath != device.HostPath || device.Permissions != "rw" {
+				t.Errorf("unexpected device mapping: %v", device)
+			}
+			paths = append(paths, device.HostPath)
+		}
+		sort.Strings(paths)
+		if !reflect.DeepEqual(paths, want[i]) {
+			t.Errorf("container %d maps %v, want %v", i, paths, want[i])
+		}
 	}
 }
